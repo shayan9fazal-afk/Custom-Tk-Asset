@@ -50,3 +50,16 @@ export interface TranscriptResponse {
   videoId: string;
   transcript: string;
 }
+
+export interface VideoInfoRequest {
+  url: string;
+}
+
+export interface VideoInfoResponse {
+  videoId: string;
+  title: string;
+  thumbnail: string;
+  duration: number;
+  uploader: string;
+  viewCount: number;
+}

@@ -12,6 +12,8 @@ tags:
     description: Health operations
   - name: youtube
     description: YouTube channel analysis operations
+  - name: downloader
+    description: YouTube video/audio downloader operations
 paths:
   /healthz:
     get:
@@ -104,6 +106,36 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/TranscriptResponse"
+        "500":
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /downloader/info:
+    post:
+      operationId: getVideoInfo
+      tags: [downloader]
+      summary: Get video metadata before downloading
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VideoInfoRequest"
+      responses:
+        "200":
+          description: Video info retrieved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VideoInfoResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
         "500":
           description: Server error
           content:
@@ -212,3 +244,32 @@ components:
       required:
         - videoId
         - transcript
+    VideoInfoRequest:
+      type: object
+      properties:
+        url:
+          type: string
+      required:
+        - url
+    VideoInfoResponse:
+      type: object
+      properties:
+        videoId:
+          type: string
+        title:
+          type: string
+        thumbnail:
+          type: string
+        duration:
+          type: integer
+        uploader:
+          type: string
+        viewCount:
+          type: integer
+      required:
+        - videoId
+        - title
+        - thumbnail
+        - duration
+        - uploader
+        - viewCount

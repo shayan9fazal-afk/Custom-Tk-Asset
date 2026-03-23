@@ -1,0 +1,358 @@
+import customtkinter as ctk
+import tkinter as tk
+from tkinter import filedialog, ttk
+import threading
+import os
+import re
+import subprocess
+import sys
+
+# ── Auto-install yt-dlp if missing ──────────────────────────────────────────
+try:
+    import yt_dlp
+except ImportError:
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "yt-dlp"])
+    import yt_dlp
+
+# ── App Setup ────────────────────────────────────────────────────────────────
+ctk.set_appearance_mode("dark")
+ctk.set_default_color_theme("blue")
+
+app = ctk.CTk()
+app.geometry("780x680")
+app.title("YT Downloader")
+app.resizable(False, False)
+
+# ── State ────────────────────────────────────────────────────────────────────
+format_var   = tk.StringVar(value="mp4")
+quality_var  = tk.StringVar(value="1080p")
+output_dir   = tk.StringVar(value=os.path.expanduser("~/Downloads"))
+status_var   = tk.StringVar(value="Ready")
+progress_var = tk.DoubleVar(value=0.0)
+speed_var    = tk.StringVar(value="")
+eta_var      = tk.StringVar(value="")
+queue_items  = []   # list of {"url": str, "status": str, "iid": str}
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+def sanitize_url(raw: str) -> str:
+    raw = raw.strip()
+    # Accept full URLs or bare video IDs
+    if re.match(r'^[\w-]{11}$', raw):
+        return f"https://www.youtube.com/watch?v={raw}"
+    return raw
+
+def format_bytes(b: float) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if b < 1024:
+            return f"{b:.1f} {unit}"
+        b /= 1024
+    return f"{b:.1f} TB"
+
+# ── Build yt-dlp options ─────────────────────────────────────────────────────
+def build_ydl_opts(url: str) -> dict:
+    fmt  = format_var.get()
+    qual = quality_var.get()
+    out  = output_dir.get()
+
+    postprocessors = []
+
+    if fmt == "mp3":
+        # Best audio → convert to mp3
+        format_spec = "bestaudio/best"
+        postprocessors.append({
+            "key": "FFmpegExtractAudio",
+            "preferredcodec": "mp3",
+            "preferredquality": "192",
+        })
+        outtmpl = os.path.join(out, "%(title)s.%(ext)s")
+
+    else:  # mp4
+        height = qual.replace("p", "")
+        # Prefer mp4 container; fall back gracefully
+        format_spec = (
+            f"bestvideo[height<={height}][ext=mp4]+bestaudio[ext=m4a]"
+            f"/bestvideo[height<={height}]+bestaudio"
+            f"/best[height<={height}]"
+            f"/best"
+        )
+        postprocessors.append({
+            "key": "FFmpegVideoConvertor",
+            "preferedformat": "mp4",
+        })
+        outtmpl = os.path.join(out, "%(title)s.%(ext)s")
+
+    def progress_hook(d):
+        if d["status"] == "downloading":
+            total   = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+            dloaded = d.get("downloaded_bytes", 0)
+            pct     = (dloaded / total * 100) if total else 0
+            spd     = d.get("speed") or 0
+            eta     = d.get("eta") or 0
+
+            progress_var.set(pct)
+            speed_var.set(f"⚡ {format_bytes(spd)}/s" if spd else "")
+            eta_var.set(f"⏱ {int(eta)}s left" if eta else "")
+            status_var.set(f"Downloading… {pct:.1f}%")
+            app.update_idletasks()
+
+        elif d["status"] == "finished":
+            progress_var.set(100)
+            status_var.set("⚙️  Post-processing…")
+            speed_var.set("")
+            eta_var.set("")
+            app.update_idletasks()
+
+    return {
+        "format": format_spec,
+        "outtmpl": outtmpl,
+        "postprocessors": postprocessors,
+        "progress_hooks": [progress_hook],
+        "merge_output_format": "mp4" if fmt == "mp4" else None,
+        "quiet": True,
+        "no_warnings": True,
+    }
+
+# ── Download worker ──────────────────────────────────────────────────────────
+def _download_worker(url: str, iid: str):
+    try:
+        opts = build_ydl_opts(url)
+        with yt_dlp.YoutubeDL(opts) as ydl:
+            ydl.download([url])
+
+        queue_tree.set(iid, "status", "✅ Done")
+        status_var.set("✅ Download complete!")
+    except yt_dlp.utils.DownloadError as e:
+        msg = str(e)
+        if "ffmpeg" in msg.lower():
+            err = "❌ ffmpeg not found"
+            status_var.set("❌ ffmpeg missing — install it and retry")
+        else:
+            err = "❌ Failed"
+            status_var.set(f"❌ {msg[:80]}")
+        queue_tree.set(iid, "status", err)
+    except Exception as e:
+        queue_tree.set(iid, "status", "❌ Error")
+        status_var.set(f"❌ {str(e)[:80]}")
+    finally:
+        progress_var.set(0)
+        speed_var.set("")
+        eta_var.set("")
+        dl_btn.configure(state="normal")
+        app.update_idletasks()
+
+def start_download():
+    raw = url_entry.get().strip()
+    if not raw:
+        status_var.set("⚠️  Paste a URL first")
+        return
+
+    url = sanitize_url(raw)
+    iid = queue_tree.insert("", "end", values=(url[:60] + "…" if len(url) > 60 else url, "⏳ Queued"))
+    dl_btn.configure(state="disabled")
+    status_var.set("🚀 Starting…")
+    progress_var.set(0)
+
+    t = threading.Thread(target=_download_worker, args=(url, iid), daemon=True)
+    t.start()
+
+def browse_dir():
+    d = filedialog.askdirectory(initialdir=output_dir.get())
+    if d:
+        output_dir.set(d)
+        dir_label.configure(text=shorten_path(d))
+
+def shorten_path(p: str) -> str:
+    home = os.path.expanduser("~")
+    if p.startswith(home):
+        return "~" + p[len(home):]
+    return p
+
+def on_format_change(*_):
+    if format_var.get() == "mp3":
+        quality_menu.configure(state="disabled")
+    else:
+        quality_menu.configure(state="normal")
+
+# ── GUI Layout ───────────────────────────────────────────────────────────────
+DARK_BG   = "#0f0f0f"
+CARD_BG   = "#1a1a1a"
+ACCENT    = "#ff0000"
+ACCENT2   = "#cc0000"
+TEXT      = "#f0f0f0"
+MUTED     = "#888888"
+
+app.configure(fg_color=DARK_BG)
+
+# ── Header ────────────────────────────────────────────────────────────────────
+header = ctk.CTkFrame(app, fg_color=CARD_BG, corner_radius=0, height=64)
+header.pack(fill="x")
+header.pack_propagate(False)
+
+ctk.CTkLabel(
+    header,
+    text="▶  YT Downloader",
+    font=ctk.CTkFont(family="Georgia", size=22, weight="bold"),
+    text_color=ACCENT,
+).pack(side="left", padx=20)
+
+ctk.CTkLabel(
+    header,
+    text="mp3  ·  mp4",
+    font=ctk.CTkFont(size=12),
+    text_color=MUTED,
+).pack(side="left", padx=4)
+
+# ── Main card ────────────────────────────────────────────────────────────────
+card = ctk.CTkFrame(app, fg_color=CARD_BG, corner_radius=12)
+card.pack(fill="x", padx=20, pady=(16, 8))
+
+# URL row
+url_row = ctk.CTkFrame(card, fg_color="transparent")
+url_row.pack(fill="x", padx=16, pady=(16, 8))
+
+ctk.CTkLabel(url_row, text="URL", width=60, anchor="w",
+             font=ctk.CTkFont(size=12), text_color=MUTED).pack(side="left")
+url_entry = ctk.CTkEntry(
+    url_row, placeholder_text="https://youtube.com/watch?v=...",
+    height=38, font=ctk.CTkFont(size=13),
+    fg_color="#111111", border_color="#333333",
+)
+url_entry.pack(side="left", fill="x", expand=True, padx=(0, 8))
+
+# Format + Quality row
+opts_row = ctk.CTkFrame(card, fg_color="transparent")
+opts_row.pack(fill="x", padx=16, pady=4)
+
+ctk.CTkLabel(opts_row, text="Format", width=60, anchor="w",
+             font=ctk.CTkFont(size=12), text_color=MUTED).pack(side="left")
+
+mp4_rb = ctk.CTkRadioButton(
+    opts_row, text="MP4 (video)", variable=format_var, value="mp4",
+    command=on_format_change,
+    fg_color=ACCENT, hover_color=ACCENT2,
+    font=ctk.CTkFont(size=13),
+)
+mp4_rb.pack(side="left", padx=(0, 16))
+
+mp3_rb = ctk.CTkRadioButton(
+    opts_row, text="MP3 (audio only)", variable=format_var, value="mp3",
+    command=on_format_change,
+    fg_color=ACCENT, hover_color=ACCENT2,
+    font=ctk.CTkFont(size=13),
+)
+mp3_rb.pack(side="left", padx=(0, 24))
+
+ctk.CTkLabel(opts_row, text="Quality", font=ctk.CTkFont(size=12),
+             text_color=MUTED).pack(side="left", padx=(0, 6))
+
+quality_menu = ctk.CTkOptionMenu(
+    opts_row, variable=quality_var,
+    values=["2160p", "1440p", "1080p", "720p", "480p", "360p"],
+    width=100, height=32,
+    fg_color="#222222", button_color=ACCENT, button_hover_color=ACCENT2,
+    font=ctk.CTkFont(size=13),
+)
+quality_menu.pack(side="left")
+
+# Output dir row
+dir_row = ctk.CTkFrame(card, fg_color="transparent")
+dir_row.pack(fill="x", padx=16, pady=4)
+
+ctk.CTkLabel(dir_row, text="Save to", width=60, anchor="w",
+             font=ctk.CTkFont(size=12), text_color=MUTED).pack(side="left")
+
+dir_label = ctk.CTkLabel(
+    dir_row, text=shorten_path(output_dir.get()),
+    font=ctk.CTkFont(size=12), text_color=TEXT, anchor="w",
+)
+dir_label.pack(side="left", fill="x", expand=True)
+
+ctk.CTkButton(
+    dir_row, text="Browse", width=80, height=30,
+    fg_color="#333333", hover_color="#444444",
+    command=browse_dir,
+    font=ctk.CTkFont(size=12),
+).pack(side="right")
+
+# Download button
+dl_btn = ctk.CTkButton(
+    card, text="Download",
+    height=44, corner_radius=8,
+    fg_color=ACCENT, hover_color=ACCENT2,
+    font=ctk.CTkFont(family="Georgia", size=15, weight="bold"),
+    command=start_download,
+)
+dl_btn.pack(fill="x", padx=16, pady=(10, 16))
+
+# ── Progress area ─────────────────────────────────────────────────────────────
+prog_card = ctk.CTkFrame(app, fg_color=CARD_BG, corner_radius=12)
+prog_card.pack(fill="x", padx=20, pady=4)
+
+prog_top = ctk.CTkFrame(prog_card, fg_color="transparent")
+prog_top.pack(fill="x", padx=16, pady=(10, 4))
+
+ctk.CTkLabel(prog_top, textvariable=status_var,
+             font=ctk.CTkFont(size=12), text_color=TEXT).pack(side="left")
+ctk.CTkLabel(prog_top, textvariable=speed_var,
+             font=ctk.CTkFont(size=12), text_color=ACCENT).pack(side="right", padx=(0, 10))
+ctk.CTkLabel(prog_top, textvariable=eta_var,
+             font=ctk.CTkFont(size=12), text_color=MUTED).pack(side="right")
+
+progress_bar = ctk.CTkProgressBar(
+    prog_card, variable=progress_var, mode="determinate",
+    height=8, corner_radius=4,
+    fg_color="#222222", progress_color=ACCENT,
+)
+progress_bar.pack(fill="x", padx=16, pady=(0, 12))
+progress_bar.set(0)
+
+# ── Queue table ───────────────────────────────────────────────────────────────
+queue_card = ctk.CTkFrame(app, fg_color=CARD_BG, corner_radius=12)
+queue_card.pack(fill="both", expand=True, padx=20, pady=(4, 16))
+
+ctk.CTkLabel(queue_card, text="Download Queue",
+             font=ctk.CTkFont(size=13, weight="bold"),
+             text_color=MUTED).pack(anchor="w", padx=16, pady=(10, 4))
+
+style = ttk.Style()
+style.theme_use("clam")
+style.configure("Queue.Treeview",
+                background="#111111", foreground=TEXT,
+                fieldbackground="#111111", rowheight=28,
+                font=("Courier New", 11))
+style.configure("Queue.Treeview.Heading",
+                background="#1a1a1a", foreground=MUTED,
+                font=("Georgia", 11, "bold"))
+style.map("Queue.Treeview", background=[("selected", "#2a0000")])
+
+tree_frame = ctk.CTkFrame(queue_card, fg_color="transparent")
+tree_frame.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+
+queue_tree = ttk.Treeview(
+    tree_frame, columns=("url", "status"),
+    show="headings", style="Queue.Treeview",
+)
+queue_tree.heading("url",    text="URL / Title")
+queue_tree.heading("status", text="Status")
+queue_tree.column("url",    anchor="w", width=520)
+queue_tree.column("status", anchor="center", width=160)
+queue_tree.pack(side="left", fill="both", expand=True)
+
+q_scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=queue_tree.yview)
+q_scroll.pack(side="right", fill="y")
+queue_tree.configure(yscrollcommand=q_scroll.set)
+
+# ── Footer ────────────────────────────────────────────────────────────────────
+foot = ctk.CTkFrame(app, fg_color="transparent", height=24)
+foot.pack(fill="x", padx=20)
+
+ctk.CTkLabel(
+    foot,
+    text="Requires ffmpeg on PATH for MP3 conversion and MP4 merging  ·  powered by yt-dlp",
+    font=ctk.CTkFont(size=10),
+    text_color=MUTED,
+).pack(side="left")
+
+# init
+on_format_change()
+app.mainloop()

@@ -24,6 +24,8 @@ import type {
   ResolveChannelIdRequest,
   ResolveChannelIdResponse,
   TranscriptResponse,
+  VideoInfoRequest,
+  VideoInfoResponse,
 } from "./api.schemas";
 
 import { customFetch } from "../custom-fetch";
@@ -370,3 +372,89 @@ export function useFetchTranscript<
 
   return { ...query, queryKey: queryOptions.queryKey };
 }
+
+/**
+ * @summary Get video metadata before downloading
+ */
+export const getGetVideoInfoUrl = () => {
+  return `/api/downloader/info`;
+};
+
+export const getVideoInfo = async (
+  videoInfoRequest: VideoInfoRequest,
+  options?: RequestInit,
+): Promise<VideoInfoResponse> => {
+  return customFetch<VideoInfoResponse>(getGetVideoInfoUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(videoInfoRequest),
+  });
+};
+
+export const getGetVideoInfoMutationOptions = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof getVideoInfo>>,
+    TError,
+    { data: BodyType<VideoInfoRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof getVideoInfo>>,
+  TError,
+  { data: BodyType<VideoInfoRequest> },
+  TContext
+> => {
+  const mutationKey = ["getVideoInfo"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof getVideoInfo>>,
+    { data: BodyType<VideoInfoRequest> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return getVideoInfo(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type GetVideoInfoMutationResult = NonNullable<
+  Awaited<ReturnType<typeof getVideoInfo>>
+>;
+export type GetVideoInfoMutationBody = BodyType<VideoInfoRequest>;
+export type GetVideoInfoMutationError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Get video metadata before downloading
+ */
+export const useGetVideoInfo = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof getVideoInfo>>,
+    TError,
+    { data: BodyType<VideoInfoRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof getVideoInfo>>,
+  TError,
+  { data: BodyType<VideoInfoRequest> },
+  TContext
+> => {
+  return useMutation(getGetVideoInfoMutationOptions(options));
+};

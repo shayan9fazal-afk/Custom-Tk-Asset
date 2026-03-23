@@ -65,3 +65,19 @@ export const FetchTranscriptResponse = zod.object({
   videoId: zod.string(),
   transcript: zod.string(),
 });
+
+/**
+ * @summary Get video metadata before downloading
+ */
+export const GetVideoInfoBody = zod.object({
+  url: zod.string(),
+});
+
+export const GetVideoInfoResponse = zod.object({
+  videoId: zod.string(),
+  title: zod.string(),
+  thumbnail: zod.string(),
+  duration: zod.number(),
+  uploader: zod.string(),
+  viewCount: zod.number(),
+});

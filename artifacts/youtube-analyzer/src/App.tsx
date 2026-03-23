@@ -1,9 +1,11 @@
-import { Switch, Route, Router as WouterRouter } from "wouter";
+import { Switch, Route, Router as WouterRouter, Link, useRoute } from "wouter";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import Home from "@/pages/home";
+import Downloader from "@/pages/downloader";
 import NotFound from "@/pages/not-found";
+import { Youtube, Download } from "lucide-react";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -14,12 +16,49 @@ const queryClient = new QueryClient({
   },
 });
 
+function NavLink({ href, children }: { href: string; children: React.ReactNode }) {
+  const [active] = useRoute(href);
+  return (
+    <Link
+      href={href}
+      className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
+        active
+          ? "bg-primary/15 text-primary border border-primary/30"
+          : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+      }`}
+    >
+      {children}
+    </Link>
+  );
+}
+
+function Nav() {
+  return (
+    <nav className="fixed top-0 left-0 right-0 z-50 flex items-center justify-center gap-2 p-3 bg-background/80 backdrop-blur-xl border-b border-border/50">
+      <NavLink href="/">
+        <Youtube className="w-4 h-4" />
+        Channel Analyzer
+      </NavLink>
+      <NavLink href="/downloader">
+        <Download className="w-4 h-4" />
+        Video Downloader
+      </NavLink>
+    </nav>
+  );
+}
+
 function Router() {
   return (
-    <Switch>
-      <Route path="/" component={Home} />
-      <Route component={NotFound} />
-    </Switch>
+    <>
+      <Nav />
+      <div className="pt-14">
+        <Switch>
+          <Route path="/" component={Home} />
+          <Route path="/downloader" component={Downloader} />
+          <Route component={NotFound} />
+        </Switch>
+      </div>
+    </>
   );
 }
 

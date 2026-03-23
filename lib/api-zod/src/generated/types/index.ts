@@ -13,4 +13,6 @@ export * from "./healthStatus";
 export * from "./resolveChannelIdRequest";
 export * from "./resolveChannelIdResponse";
 export * from "./transcriptResponse";
+export * from "./videoInfoRequest";
+export * from "./videoInfoResponse";
 export * from "./videoItem";
