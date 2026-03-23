@@ -2,6 +2,8 @@ import { Router, type IRouter } from "express";
 import { spawn } from "child_process";
 import { fileURLToPath } from "url";
 import * as path from "path";
+import * as fs from "fs";
+import * as os from "os";
 
 const __filename = fileURLToPath(import.meta.url);
 const WORKSPACE_ROOT = path.resolve(path.dirname(__filename), "../../..");
@@ -40,6 +42,42 @@ function fmtDate(ts: number | string | null | undefined): string {
   }
 }
 
+function parseVtt(content: string): string {
+  const lines = content.split("\n");
+  const textLines: string[] = [];
+  let inCue = false;
+  let prevText = "";
+
+  for (const line of lines) {
+    if (line.includes("-->")) {
+      inCue = true;
+      continue;
+    }
+    if (!line.trim()) {
+      inCue = false;
+      continue;
+    }
+    if (inCue) {
+      // Strip VTT tags like <00:00:02.160><c> and </c>
+      const clean = line
+        .replace(/<\d{2}:\d{2}:\d{2}\.\d{3}>/g, "")
+        .replace(/<[^>]+>/g, "")
+        .replace(/&amp;/g, "&")
+        .replace(/&lt;/g, "<")
+        .replace(/&gt;/g, ">")
+        .replace(/&quot;/g, '"')
+        .replace(/&#39;/g, "'")
+        .trim();
+      if (clean && clean !== prevText) {
+        textLines.push(clean);
+        prevText = clean;
+      }
+    }
+  }
+
+  return textLines.join(" ") || "Unavailable";
+}
+
 interface YtDlpEntry {
   id?: string;
   title?: string;
@@ -67,6 +105,16 @@ function runYtDlpStream(args: string[]): Promise<string> {
       if (code === 0 || stdout.trim()) resolve(stdout);
       else reject(new Error(stderr.slice(0, 600)));
     });
+    proc.on("error", reject);
+  });
+}
+
+function runYtDlpSilent(args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(YTDLP_PATH, args);
+    let stderr = "";
+    proc.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
+    proc.on("close", () => resolve());
     proc.on("error", reject);
   });
 }
@@ -116,6 +164,7 @@ router.post("/scrape", async (req, res) => {
           shares: fmtNumber(entry.repost_count ?? entry.share_count),
           date: fmtDate(entry.timestamp),
           url: entry.webpage_url || entry.url || "—",
+          transcript: undefined as string | undefined,
         });
       } catch {
         // skip malformed lines
@@ -127,6 +176,61 @@ router.post("/scrape", async (req, res) => {
     const msg = err instanceof Error ? err.message : String(err);
     req.log.error({ err }, "Error scraping TikTok channel");
     res.status(500).json({ error: msg });
+  }
+});
+
+router.post("/transcript", async (req, res) => {
+  const { url } = req.body as { url?: string };
+
+  if (!url) {
+    res.status(400).json({ error: "url is required" });
+    return;
+  }
+
+  const tmpDir = os.tmpdir();
+  const tmpBase = path.join(tmpDir, `ttsub_${Date.now()}_${Math.random().toString(36).slice(2)}`);
+  const outputTemplate = `${tmpBase}.%(ext)s`;
+
+  const args = [
+    "--write-auto-sub",
+    "--write-sub",
+    "--sub-lang", "en,en-US,en-orig",
+    "--skip-download",
+    "--no-warnings",
+    "--quiet",
+    "--ignore-errors",
+    "-o", outputTemplate,
+    url,
+  ];
+
+  try {
+    await runYtDlpSilent(args);
+
+    // Find any generated subtitle file with our base name
+    const allFiles = fs.readdirSync(tmpDir);
+    const subFiles = allFiles.filter(f =>
+      f.startsWith(path.basename(tmpBase)) && (f.endsWith(".vtt") || f.endsWith(".srt") || f.endsWith(".ass"))
+    );
+
+    if (subFiles.length === 0) {
+      res.json({ url, transcript: "Unavailable" });
+      return;
+    }
+
+    const subPath = path.join(tmpDir, subFiles[0]);
+    const content = fs.readFileSync(subPath, "utf-8");
+
+    // Clean up
+    for (const f of subFiles) {
+      try { fs.unlinkSync(path.join(tmpDir, f)); } catch { /* ignore */ }
+    }
+
+    const transcript = parseVtt(content);
+    res.json({ url, transcript });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    req.log.error({ err }, "Error fetching TikTok transcript");
+    res.json({ url, transcript: "Unavailable" });
   }
 });
 

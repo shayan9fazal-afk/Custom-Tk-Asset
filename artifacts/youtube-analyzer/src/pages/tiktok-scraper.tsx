@@ -1,11 +1,13 @@
 import { useState, useRef } from "react"
 import {
   Music2, Link as LinkIcon, AlertCircle, Loader2,
-  Download, Copy, Check, ArrowUpDown, ExternalLink
+  Download, Copy, Check, ArrowUpDown, ExternalLink,
+  FileText, ChevronDown, ChevronUp
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
+import { Switch } from "@/components/ui/switch"
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select"
@@ -19,6 +21,7 @@ interface TikTokVideo {
   shares: string
   date: string
   url: string
+  transcript?: string
 }
 
 const COLUMNS: { key: keyof TikTokVideo; label: string }[] = [
@@ -40,16 +43,91 @@ function numericVal(s: string): number {
   return isNaN(v) ? -1 : v
 }
 
+function TranscriptCell({ text }: { text: string | undefined }) {
+  const [expanded, setExpanded] = useState(false)
+  const [copied, setCopied] = useState(false)
+
+  if (text === undefined) {
+    return <span className="text-muted-foreground text-xs italic">—</span>
+  }
+  if (text === "Unavailable") {
+    return <span className="text-muted-foreground text-xs italic">Unavailable</span>
+  }
+
+  function copy() {
+    navigator.clipboard.writeText(text ?? "")
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
+  }
+
+  const preview = text.slice(0, 120)
+  const hasMore = text.length > 120
+
+  return (
+    <div className="max-w-xs">
+      <p className={`text-xs leading-relaxed ${expanded ? "" : "line-clamp-2"}`}>{text}</p>
+      <div className="flex items-center gap-2 mt-1">
+        {hasMore && (
+          <button
+            onClick={() => setExpanded(e => !e)}
+            className="text-xs text-primary hover:underline flex items-center gap-0.5"
+          >
+            {expanded ? <><ChevronUp className="w-3 h-3" />Less</> : <><ChevronDown className="w-3 h-3" />More</>}
+          </button>
+        )}
+        <button
+          onClick={copy}
+          className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-0.5"
+          title="Copy transcript"
+        >
+          {copied ? <><Check className="w-3 h-3 text-primary" />Copied</> : <><Copy className="w-3 h-3" />Copy</>}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 export default function TikTokScraper() {
   const [handle, setHandle] = useState("")
   const [limit, setLimit] = useState("20")
+  const [withTranscripts, setWithTranscripts] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [transcriptProgress, setTranscriptProgress] = useState<{ done: number; total: number } | null>(null)
   const [videos, setVideos] = useState<TikTokVideo[]>([])
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
   const [sortKey, setSortKey] = useState<keyof TikTokVideo | null>(null)
   const [sortDir, setSortDir] = useState<SortDir>("desc")
   const abortRef = useRef<AbortController | null>(null)
+
+  async function fetchTranscripts(vids: TikTokVideo[]): Promise<TikTokVideo[]> {
+    const updated = [...vids]
+    setTranscriptProgress({ done: 0, total: vids.length })
+
+    for (let i = 0; i < updated.length; i++) {
+      if (updated[i].url === "—") {
+        updated[i] = { ...updated[i], transcript: "Unavailable" }
+      } else {
+        try {
+          const resp = await fetch("/api/tiktok/transcript", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url: updated[i].url }),
+          })
+          const data = await resp.json() as { transcript?: string }
+          updated[i] = { ...updated[i], transcript: data.transcript ?? "Unavailable" }
+        } catch {
+          updated[i] = { ...updated[i], transcript: "Unavailable" }
+        }
+      }
+      // Update state incrementally so rows fill in as they arrive
+      setVideos([...updated])
+      setTranscriptProgress({ done: i + 1, total: vids.length })
+    }
+
+    setTranscriptProgress(null)
+    return updated
+  }
 
   async function scrape() {
     if (!handle.trim()) return
@@ -60,6 +138,7 @@ export default function TikTokScraper() {
     setError(null)
     setVideos([])
     setSortKey(null)
+    setTranscriptProgress(null)
 
     try {
       const resp = await fetch("/api/tiktok/scrape", {
@@ -73,12 +152,18 @@ export default function TikTokScraper() {
       })
       const data = await resp.json() as { videos?: TikTokVideo[]; error?: string }
       if (!resp.ok) throw new Error(data.error || "Scrape failed")
-      setVideos(data.videos || [])
+
+      const vids = data.videos || []
+      setVideos(vids)
+      setLoading(false)
+
+      if (withTranscripts && vids.length > 0) {
+        await fetchTranscripts(vids)
+      }
     } catch (e) {
       if ((e as Error).name !== "AbortError") {
         setError(e instanceof Error ? e.message : "Unknown error")
       }
-    } finally {
       setLoading(false)
     }
   }
@@ -94,7 +179,8 @@ export default function TikTokScraper() {
 
   const sorted = [...videos].sort((a, b) => {
     if (!sortKey) return 0
-    const aStr = a[sortKey], bStr = b[sortKey]
+    const aStr = a[sortKey] ?? ""
+    const bStr = b[sortKey] ?? ""
     const numericCols = ["views", "likes", "comments", "shares"]
     let cmp: number
     if (numericCols.includes(sortKey)) {
@@ -105,11 +191,14 @@ export default function TikTokScraper() {
     return sortDir === "asc" ? cmp : -cmp
   })
 
+  const hasTranscripts = videos.some(v => v.transcript !== undefined)
+
   function exportCsv() {
     if (!videos.length) return
-    const header = [...COLUMNS.map(c => c.label), "URL"].join(",")
+    const cols = [...COLUMNS, ...(hasTranscripts ? [{ key: "transcript" as keyof TikTokVideo, label: "Transcript" }] : []), { key: "url" as keyof TikTokVideo, label: "URL" }]
+    const header = cols.map(c => c.label).join(",")
     const rows = videos.map(v =>
-      [...COLUMNS.map(c => `"${v[c.key].replace(/"/g, '""')}"`), `"${v.url}"`].join(",")
+      cols.map(c => `"${(v[c.key] ?? "").replace(/"/g, '""')}"`).join(",")
     )
     const csv = [header, ...rows].join("\n")
     const blob = new Blob([csv], { type: "text/csv" })
@@ -123,15 +212,16 @@ export default function TikTokScraper() {
 
   function copyClipboard() {
     if (!videos.length) return
-    const header = [...COLUMNS.map(c => c.label), "URL"].join("\t")
-    const rows = videos.map(v =>
-      [...COLUMNS.map(c => v[c.key]), v.url].join("\t")
-    )
+    const cols = [...COLUMNS, ...(hasTranscripts ? [{ key: "transcript" as keyof TikTokVideo, label: "Transcript" }] : []), { key: "url" as keyof TikTokVideo, label: "URL" }]
+    const header = cols.map(c => c.label).join("\t")
+    const rows = videos.map(v => cols.map(c => v[c.key] ?? "").join("\t"))
     navigator.clipboard.writeText([header, ...rows].join("\n")).then(() => {
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     })
   }
+
+  const isWorking = loading || transcriptProgress !== null
 
   return (
     <div className="min-h-screen w-full pb-20">
@@ -147,7 +237,7 @@ export default function TikTokScraper() {
           </div>
           <h1 className="text-4xl md:text-5xl font-bold glow-text mb-4">TikTok Scraper</h1>
           <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-            Scrape public video metadata from any TikTok profile. No API key or login needed.
+            Scrape public video metadata and transcripts from any TikTok profile. No API key or login needed.
           </p>
         </header>
 
@@ -164,7 +254,7 @@ export default function TikTokScraper() {
                 placeholder="@username  or  https://tiktok.com/@username"
                 value={handle}
                 onChange={e => setHandle(e.target.value)}
-                onKeyDown={e => e.key === "Enter" && scrape()}
+                onKeyDown={e => e.key === "Enter" && !isWorking && scrape()}
               />
             </div>
 
@@ -188,16 +278,55 @@ export default function TikTokScraper() {
 
             <Button
               onClick={scrape}
-              disabled={loading || !handle.trim()}
+              disabled={isWorking || !handle.trim()}
               className="h-10 px-6 shrink-0"
             >
               {loading ? (
                 <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Scraping…</>
+              ) : transcriptProgress ? (
+                <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Transcripts…</>
               ) : (
                 "Scrape Channel"
               )}
             </Button>
           </div>
+
+          {/* Transcript toggle */}
+          <div className="mt-5 pt-5 border-t border-border flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <FileText className="w-4 h-4 text-primary" />
+              <div>
+                <p className="text-sm font-medium">Fetch Transcripts</p>
+                <p className="text-xs text-muted-foreground">
+                  Auto-generated captions via yt-dlp — may be slow for large sets
+                </p>
+              </div>
+            </div>
+            <Switch
+              checked={withTranscripts}
+              onCheckedChange={setWithTranscripts}
+              disabled={isWorking}
+            />
+          </div>
+
+          {/* Transcript progress */}
+          {transcriptProgress && (
+            <div className="mt-4 space-y-2 animate-in fade-in">
+              <div className="flex justify-between text-xs text-muted-foreground">
+                <span className="text-primary font-medium flex items-center gap-1.5">
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  Fetching transcripts…
+                </span>
+                <span>{transcriptProgress.done} / {transcriptProgress.total}</span>
+              </div>
+              <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                <div
+                  className="h-full bg-primary rounded-full transition-all duration-300"
+                  style={{ width: `${(transcriptProgress.done / transcriptProgress.total) * 100}%` }}
+                />
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Error */}
@@ -223,6 +352,11 @@ export default function TikTokScraper() {
             <div className="flex items-center justify-between px-6 py-4 border-b border-border">
               <p className="text-sm text-muted-foreground font-medium">
                 <span className="text-foreground font-semibold">{videos.length}</span> videos scraped
+                {transcriptProgress && (
+                  <span className="ml-2 text-primary text-xs">
+                    · transcripts {transcriptProgress.done}/{transcriptProgress.total}
+                  </span>
+                )}
               </p>
               <div className="flex items-center gap-2">
                 <Button variant="outline" size="sm" onClick={copyClipboard}>
@@ -253,6 +387,14 @@ export default function TikTokScraper() {
                         </span>
                       </th>
                     ))}
+                    {hasTranscripts && (
+                      <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap">
+                        <span className="flex items-center gap-1.5">
+                          <FileText className="w-3 h-3" />
+                          Transcript
+                        </span>
+                      </th>
+                    )}
                     <th className="px-4 py-3 text-left text-xs font-semibold text-muted-foreground uppercase tracking-wider whitespace-nowrap">
                       Link
                     </th>
@@ -273,6 +415,15 @@ export default function TikTokScraper() {
                       <td className="px-4 py-3 whitespace-nowrap font-mono text-right">{v.comments}</td>
                       <td className="px-4 py-3 whitespace-nowrap font-mono text-right">{v.shares}</td>
                       <td className="px-4 py-3 whitespace-nowrap text-muted-foreground">{v.date}</td>
+                      {hasTranscripts && (
+                        <td className="px-4 py-3">
+                          {v.transcript === undefined && transcriptProgress ? (
+                            <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />
+                          ) : (
+                            <TranscriptCell text={v.transcript} />
+                          )}
+                        </td>
+                      )}
                       <td className="px-4 py-3">
                         {v.url !== "—" ? (
                           <a
