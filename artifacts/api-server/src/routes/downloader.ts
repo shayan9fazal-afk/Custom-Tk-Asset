@@ -1,14 +1,17 @@
 import { Router, type IRouter } from "express";
 import { spawn } from "child_process";
+import { fileURLToPath } from "url";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { GetVideoInfoBody } from "@workspace/api-zod";
 
-const router: IRouter = Router();
-
-const YTDLP_PATH = path.resolve(process.cwd(), "yt-dlp");
+const __filename = fileURLToPath(import.meta.url);
+const WORKSPACE_ROOT = path.resolve(path.dirname(__filename), "../../..");
+const YTDLP_PATH = path.join(WORKSPACE_ROOT, "yt-dlp");
 const FFMPEG_PATH = "/nix/store/6h39ipxhzp4r5in5g4rhdjz7p7fkicd0-replit-runtime-path/bin/ffmpeg";
+
+const router: IRouter = Router();
 
 function normalizeUrl(raw: string): string {
   const bare11 = /^[\w-]{11}$/.test(raw.trim());
