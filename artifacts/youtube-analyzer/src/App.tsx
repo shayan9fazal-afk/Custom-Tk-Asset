@@ -4,8 +4,9 @@ import { Toaster } from "@/components/ui/toaster";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import Home from "@/pages/home";
 import Downloader from "@/pages/downloader";
+import TikTokScraper from "@/pages/tiktok-scraper";
 import NotFound from "@/pages/not-found";
-import { Youtube, Download } from "lucide-react";
+import { Youtube, Download, Music2 } from "lucide-react";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -41,7 +42,11 @@ function Nav() {
       </NavLink>
       <NavLink href="/downloader">
         <Download className="w-4 h-4" />
-        Video Downloader
+        YT Downloader
+      </NavLink>
+      <NavLink href="/tiktok">
+        <Music2 className="w-4 h-4" />
+        TikTok Scraper
       </NavLink>
     </nav>
   );
@@ -55,6 +60,7 @@ function Router() {
         <Switch>
           <Route path="/" component={Home} />
           <Route path="/downloader" component={Downloader} />
+          <Route path="/tiktok" component={TikTokScraper} />
           <Route component={NotFound} />
         </Switch>
       </div>

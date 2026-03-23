@@ -14,6 +14,8 @@ tags:
     description: YouTube channel analysis operations
   - name: downloader
     description: YouTube video/audio downloader operations
+  - name: tiktok
+    description: TikTok channel scraper operations
 paths:
   /healthz:
     get:
