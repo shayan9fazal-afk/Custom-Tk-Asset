@@ -5,18 +5,29 @@
  * API specification
  * OpenAPI spec version: 0.1.0
  */
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import type {
+  MutationFunction,
   QueryFunction,
   QueryKey,
+  UseMutationOptions,
+  UseMutationResult,
   UseQueryOptions,
   UseQueryResult,
 } from "@tanstack/react-query";
 
-import type { HealthStatus } from "./api.schemas";
+import type {
+  ErrorResponse,
+  FetchVideosRequest,
+  FetchVideosResponse,
+  HealthStatus,
+  ResolveChannelIdRequest,
+  ResolveChannelIdResponse,
+  TranscriptResponse,
+} from "./api.schemas";
 
 import { customFetch } from "../custom-fetch";
-import type { ErrorType } from "../custom-fetch";
+import type { ErrorType, BodyType } from "../custom-fetch";
 
 type AwaitedInput<T> = PromiseLike<T> | T;
 
@@ -92,6 +103,266 @@ export function useHealthCheck<
   request?: SecondParameter<typeof customFetch>;
 }): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
   const queryOptions = getHealthCheckQueryOptions(options);
+
+  const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
+    queryKey: QueryKey;
+  };
+
+  return { ...query, queryKey: queryOptions.queryKey };
+}
+
+/**
+ * @summary Resolve channel ID from URL or video URL
+ */
+export const getResolveChannelIdUrl = () => {
+  return `/api/youtube/channel-id`;
+};
+
+export const resolveChannelId = async (
+  resolveChannelIdRequest: ResolveChannelIdRequest,
+  options?: RequestInit,
+): Promise<ResolveChannelIdResponse> => {
+  return customFetch<ResolveChannelIdResponse>(getResolveChannelIdUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(resolveChannelIdRequest),
+  });
+};
+
+export const getResolveChannelIdMutationOptions = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof resolveChannelId>>,
+    TError,
+    { data: BodyType<ResolveChannelIdRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof resolveChannelId>>,
+  TError,
+  { data: BodyType<ResolveChannelIdRequest> },
+  TContext
+> => {
+  const mutationKey = ["resolveChannelId"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof resolveChannelId>>,
+    { data: BodyType<ResolveChannelIdRequest> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return resolveChannelId(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type ResolveChannelIdMutationResult = NonNullable<
+  Awaited<ReturnType<typeof resolveChannelId>>
+>;
+export type ResolveChannelIdMutationBody = BodyType<ResolveChannelIdRequest>;
+export type ResolveChannelIdMutationError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Resolve channel ID from URL or video URL
+ */
+export const useResolveChannelId = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof resolveChannelId>>,
+    TError,
+    { data: BodyType<ResolveChannelIdRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof resolveChannelId>>,
+  TError,
+  { data: BodyType<ResolveChannelIdRequest> },
+  TContext
+> => {
+  return useMutation(getResolveChannelIdMutationOptions(options));
+};
+
+/**
+ * @summary Fetch videos from a YouTube channel
+ */
+export const getFetchVideosUrl = () => {
+  return `/api/youtube/videos`;
+};
+
+export const fetchVideos = async (
+  fetchVideosRequest: FetchVideosRequest,
+  options?: RequestInit,
+): Promise<FetchVideosResponse> => {
+  return customFetch<FetchVideosResponse>(getFetchVideosUrl(), {
+    ...options,
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...options?.headers },
+    body: JSON.stringify(fetchVideosRequest),
+  });
+};
+
+export const getFetchVideosMutationOptions = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof fetchVideos>>,
+    TError,
+    { data: BodyType<FetchVideosRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationOptions<
+  Awaited<ReturnType<typeof fetchVideos>>,
+  TError,
+  { data: BodyType<FetchVideosRequest> },
+  TContext
+> => {
+  const mutationKey = ["fetchVideos"];
+  const { mutation: mutationOptions, request: requestOptions } = options
+    ? options.mutation &&
+      "mutationKey" in options.mutation &&
+      options.mutation.mutationKey
+      ? options
+      : { ...options, mutation: { ...options.mutation, mutationKey } }
+    : { mutation: { mutationKey }, request: undefined };
+
+  const mutationFn: MutationFunction<
+    Awaited<ReturnType<typeof fetchVideos>>,
+    { data: BodyType<FetchVideosRequest> }
+  > = (props) => {
+    const { data } = props ?? {};
+
+    return fetchVideos(data, requestOptions);
+  };
+
+  return { mutationFn, ...mutationOptions };
+};
+
+export type FetchVideosMutationResult = NonNullable<
+  Awaited<ReturnType<typeof fetchVideos>>
+>;
+export type FetchVideosMutationBody = BodyType<FetchVideosRequest>;
+export type FetchVideosMutationError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Fetch videos from a YouTube channel
+ */
+export const useFetchVideos = <
+  TError = ErrorType<ErrorResponse>,
+  TContext = unknown,
+>(options?: {
+  mutation?: UseMutationOptions<
+    Awaited<ReturnType<typeof fetchVideos>>,
+    TError,
+    { data: BodyType<FetchVideosRequest> },
+    TContext
+  >;
+  request?: SecondParameter<typeof customFetch>;
+}): UseMutationResult<
+  Awaited<ReturnType<typeof fetchVideos>>,
+  TError,
+  { data: BodyType<FetchVideosRequest> },
+  TContext
+> => {
+  return useMutation(getFetchVideosMutationOptions(options));
+};
+
+/**
+ * @summary Fetch transcript for a video
+ */
+export const getFetchTranscriptUrl = (videoId: string) => {
+  return `/api/youtube/transcript/${videoId}`;
+};
+
+export const fetchTranscript = async (
+  videoId: string,
+  options?: RequestInit,
+): Promise<TranscriptResponse> => {
+  return customFetch<TranscriptResponse>(getFetchTranscriptUrl(videoId), {
+    ...options,
+    method: "GET",
+  });
+};
+
+export const getFetchTranscriptQueryKey = (videoId: string) => {
+  return [`/api/youtube/transcript/${videoId}`] as const;
+};
+
+export const getFetchTranscriptQueryOptions = <
+  TData = Awaited<ReturnType<typeof fetchTranscript>>,
+  TError = ErrorType<ErrorResponse>,
+>(
+  videoId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof fetchTranscript>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+) => {
+  const { query: queryOptions, request: requestOptions } = options ?? {};
+
+  const queryKey =
+    queryOptions?.queryKey ?? getFetchTranscriptQueryKey(videoId);
+
+  const queryFn: QueryFunction<Awaited<ReturnType<typeof fetchTranscript>>> = ({
+    signal,
+  }) => fetchTranscript(videoId, { signal, ...requestOptions });
+
+  return {
+    queryKey,
+    queryFn,
+    enabled: !!videoId,
+    ...queryOptions,
+  } as UseQueryOptions<
+    Awaited<ReturnType<typeof fetchTranscript>>,
+    TError,
+    TData
+  > & { queryKey: QueryKey };
+};
+
+export type FetchTranscriptQueryResult = NonNullable<
+  Awaited<ReturnType<typeof fetchTranscript>>
+>;
+export type FetchTranscriptQueryError = ErrorType<ErrorResponse>;
+
+/**
+ * @summary Fetch transcript for a video
+ */
+
+export function useFetchTranscript<
+  TData = Awaited<ReturnType<typeof fetchTranscript>>,
+  TError = ErrorType<ErrorResponse>,
+>(
+  videoId: string,
+  options?: {
+    query?: UseQueryOptions<
+      Awaited<ReturnType<typeof fetchTranscript>>,
+      TError,
+      TData
+    >;
+    request?: SecondParameter<typeof customFetch>;
+  },
+): UseQueryResult<TData, TError> & { queryKey: QueryKey } {
+  const queryOptions = getFetchTranscriptQueryOptions(videoId, options);
 
   const query = useQuery(queryOptions) as UseQueryResult<TData, TError> & {
     queryKey: QueryKey;

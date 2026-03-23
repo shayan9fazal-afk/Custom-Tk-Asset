@@ -1,0 +1,23 @@
+packages:
+  "framer-motion": "Smooth page transitions and staggered list animations"
+  "papaparse": "CSV and TSV export functionality"
+  "@types/papaparse": "TypeScript definitions for papaparse"
+  "@tanstack/react-table": "Robust headless table for sortable data grid"
+  "lucide-react": "Clean, consistent icons"
+  "clsx": "Utility for constructing className strings conditionally"
+  "tailwind-merge": "Utility to gracefully merge Tailwind classes"
+  "@radix-ui/react-slot": "Radix UI primitive for polymorphic components"
+  "@radix-ui/react-checkbox": "Accessible checkbox component"
+  "@radix-ui/react-select": "Accessible select dropdown component"
+  "@radix-ui/react-dialog": "Accessible modal dialog for transcripts"
+  "date-fns": "Formatting dates safely and cleanly"
+
+images:
+  - path: "artifacts/youtube-analyzer/public/images/dark-mesh-bg.png"
+    description: "A very dark, subtle gradient mesh background in deep navy, charcoal, and black with a faint cyan/indigo technological ambient light leak in the corner."
+    aspect_ratio: "16:9"
+
+notes:
+  - "Assuming limit 'All' maps to null in the API request as defined by the schema."
+  - "Implementing custom sorting in react-table to handle string-based numbers (e.g. '1,000' or '1.5M')."
+  - "The UI will be strictly dark mode to fit the 'professional dark mode' direction."

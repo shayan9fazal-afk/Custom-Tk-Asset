@@ -8,3 +8,45 @@
 export interface HealthStatus {
   status: string;
 }
+
+export interface ErrorResponse {
+  error: string;
+}
+
+export interface ResolveChannelIdRequest {
+  apiKey: string;
+  url: string;
+}
+
+export interface ResolveChannelIdResponse {
+  channelId: string;
+  channelTitle: string;
+}
+
+export interface FetchVideosRequest {
+  apiKey: string;
+  channelId: string;
+  limit?: number | null;
+  withTranscripts: boolean;
+}
+
+export interface VideoItem {
+  videoId: string;
+  title: string;
+  duration: string;
+  views: string;
+  likes: string;
+  comments: string;
+  publishedAt: string;
+  transcript: string;
+}
+
+export interface FetchVideosResponse {
+  videos: VideoItem[];
+  total: number;
+}
+
+export interface TranscriptResponse {
+  videoId: string;
+  transcript: string;
+}

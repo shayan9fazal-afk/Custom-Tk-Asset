@@ -10,6 +10,8 @@ servers:
 tags:
   - name: health
     description: Health operations
+  - name: youtube
+    description: YouTube channel analysis operations
 paths:
   /healthz:
     get:
@@ -24,6 +26,90 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /youtube/channel-id:
+    post:
+      operationId: resolveChannelId
+      tags: [youtube]
+      summary: Resolve channel ID from URL or video URL
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResolveChannelIdRequest"
+      responses:
+        "200":
+          description: Channel ID resolved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResolveChannelIdResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /youtube/videos:
+    post:
+      operationId: fetchVideos
+      tags: [youtube]
+      summary: Fetch videos from a YouTube channel
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/FetchVideosRequest"
+      responses:
+        "200":
+          description: Videos fetched
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FetchVideosResponse"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "500":
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /youtube/transcript/{videoId}:
+    get:
+      operationId: fetchTranscript
+      tags: [youtube]
+      summary: Fetch transcript for a video
+      parameters:
+        - name: videoId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Transcript fetched
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TranscriptResponse"
+        "500":
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 components:
   schemas:
     HealthStatus:
@@ -33,4 +119,96 @@ components:
           type: string
       required:
         - status
-
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+    ResolveChannelIdRequest:
+      type: object
+      properties:
+        apiKey:
+          type: string
+        url:
+          type: string
+      required:
+        - apiKey
+        - url
+    ResolveChannelIdResponse:
+      type: object
+      properties:
+        channelId:
+          type: string
+        channelTitle:
+          type: string
+      required:
+        - channelId
+        - channelTitle
+    FetchVideosRequest:
+      type: object
+      properties:
+        apiKey:
+          type: string
+        channelId:
+          type: string
+        limit:
+          type: integer
+          nullable: true
+        withTranscripts:
+          type: boolean
+      required:
+        - apiKey
+        - channelId
+        - withTranscripts
+    VideoItem:
+      type: object
+      properties:
+        videoId:
+          type: string
+        title:
+          type: string
+        duration:
+          type: string
+        views:
+          type: string
+        likes:
+          type: string
+        comments:
+          type: string
+        publishedAt:
+          type: string
+        transcript:
+          type: string
+      required:
+        - videoId
+        - title
+        - duration
+        - views
+        - likes
+        - comments
+        - publishedAt
+        - transcript
+    FetchVideosResponse:
+      type: object
+      properties:
+        videos:
+          type: array
+          items:
+            $ref: "#/components/schemas/VideoItem"
+        total:
+          type: integer
+      required:
+        - videos
+        - total
+    TranscriptResponse:
+      type: object
+      properties:
+        videoId:
+          type: string
+        transcript:
+          type: string
+      required:
+        - videoId
+        - transcript

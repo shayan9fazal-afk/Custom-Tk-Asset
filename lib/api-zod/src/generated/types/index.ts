@@ -6,4 +6,11 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export * from "./errorResponse";
+export * from "./fetchVideosRequest";
+export * from "./fetchVideosResponse";
 export * from "./healthStatus";
+export * from "./resolveChannelIdRequest";
+export * from "./resolveChannelIdResponse";
+export * from "./transcriptResponse";
+export * from "./videoItem";

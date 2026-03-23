@@ -1,0 +1,233 @@
+import customtkinter as ctk
+from googleapiclient.discovery import build
+from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
+import tkinter as tk
+from tkinter import ttk, filedialog
+import re
+import isodate
+import csv
+import io
+
+
+ctk.set_appearance_mode("system")
+app = ctk.CTk()
+app.geometry("1100x800")
+app.title("YouTube Channel Analyzer")
+
+api_entry = ctk.CTkEntry(app, width=700, placeholder_text="🔑 API Key")
+api_entry.pack(pady=(10, 5))
+
+url_entry = ctk.CTkEntry(app, width=700, placeholder_text="📺 YouTube Video or Channel URL")
+url_entry.pack(pady=5)
+
+dropdown_var = tk.StringVar(value="10")
+dropdown = ctk.CTkOptionMenu(app, variable=dropdown_var, values=["5", "10", "25", "50", "100", "All"])
+dropdown.pack(pady=5)
+
+transcript_var = tk.BooleanVar(value=False)
+ctk.CTkCheckBox(app, text="Include Transcripts", variable=transcript_var).pack(pady=(0, 10))
+
+progress_label = ctk.CTkLabel(app, text="")
+progress_label.pack()
+
+columns = ("Title", "Duration", "Views", "Likes", "Comments", "Date", "Transcript", "Video ID")
+table_frame = ctk.CTkFrame(app)
+table_frame.pack(fill="both", expand=True, padx=10, pady=10)
+
+tree = ttk.Treeview(table_frame, columns=columns, show="headings", height=20)
+tree.pack(side="left", fill="both", expand=True)
+
+for col in columns:
+    tree.heading(col, text=col, command=lambda _col=col: sort_column(tree, _col, False))
+    tree.column(col, anchor="w", width=150)
+
+tree.column("Video ID", width=0, stretch=False)
+tree.column("Transcript", width=300, anchor="w")
+
+scrollbar = ttk.Scrollbar(table_frame, orient="vertical", command=tree.yview)
+scrollbar.pack(side="right", fill="y")
+tree.configure(yscrollcommand=scrollbar.set)
+
+def sort_column(tree, col, reverse):
+    l = [(tree.set(k, col), k) for k in tree.get_children("")]
+    try:
+        l.sort(key=lambda t: int(t[0].replace(",", "")), reverse=reverse)
+    except ValueError:
+        l.sort(reverse=reverse)
+    for index, (val, k) in enumerate(l):
+        tree.move(k, "", index)
+    tree.heading(col, command=lambda: sort_column(tree, col, not reverse))
+
+def export_to_csv():
+    if not tree.get_children(): return
+    file = filedialog.asksaveasfilename(defaultextension=".csv", filetypes=[("CSV files", "*.csv")])
+    if not file: return
+    with open(file, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(columns)
+        for row in tree.get_children():
+            writer.writerow(tree.item(row)["values"])
+
+def copy_to_clipboard():
+    if not tree.get_children(): return
+    output = io.StringIO()
+    writer = csv.writer(output, delimiter="\t")
+    writer.writerow(columns)
+    for row in tree.get_children():
+        writer.writerow(tree.item(row)["values"])
+    app.clipboard_clear()
+    app.clipboard_append(output.getvalue())
+    app.update()
+
+def update_table(data):
+    for row in tree.get_children():
+        tree.delete(row)
+    for row in data:
+        tree.insert("", "end", values=row)
+
+def on_fetch():
+    key = api_entry.get().strip()
+    url = url_entry.get().strip()
+    limit_str = dropdown_var.get()
+    if not key or not url:
+        progress_label.configure(text="❌ API key and URL required")
+        return
+
+    youtube = build("youtube", "v3", developerKey=key)
+    progress_label.configure(text="🔄 Fetching video data...")
+    app.update()
+    try:
+        channel_id = extract_channel_id(youtube, url)
+        playlist_id = get_upload_playlist(youtube, channel_id)
+        limit = None if limit_str == "All" else int(limit_str)
+        ids = fetch_channel_videos(youtube, playlist_id, limit)
+        data = fetch_video_details(youtube, ids, transcript_var.get())
+        update_table(data)
+        progress_label.configure(text=f"✅ Fetched {len(data)} videos")
+    except Exception as e:
+        progress_label.configure(text=f"❌ Error: {e}")
+
+def extract_channel_id(youtube, url):
+    if "channel/" in url:
+        return url.split("channel/")[1].split("/")[0]
+    elif "watch?v=" in url:
+        video_id = re.search(r"v=([\w-]+)", url).group(1)
+        video = youtube.videos().list(part="snippet", id=video_id).execute()
+        return video["items"][0]["snippet"]["channelId"]
+    elif "/@" in url:
+        handle = re.search(r"/@[^/]+", url).group(0)
+        search = youtube.search().list(q=handle, type="channel", part="snippet", maxResults=1).execute()
+        return search["items"][0]["snippet"]["channelId"]
+    return None
+
+def get_upload_playlist(youtube, channel_id):
+    resp = youtube.channels().list(part="contentDetails", id=channel_id).execute()
+    return resp["items"][0]["contentDetails"]["relatedPlaylists"]["uploads"]
+
+def fetch_channel_videos(youtube, playlist_id, max_videos):
+    videos = []
+    next_page = None
+    while True:
+        resp = youtube.playlistItems().list(
+            part="snippet",
+            playlistId=playlist_id,
+            maxResults=50,
+            pageToken=next_page
+        ).execute()
+        videos += resp["items"]
+        next_page = resp.get("nextPageToken")
+        if not next_page or (max_videos and len(videos) >= max_videos):
+            break
+    return [v["snippet"]["resourceId"]["videoId"] for v in videos[:max_videos]] if max_videos else [v["snippet"]["resourceId"]["videoId"] for v in videos]
+
+
+# FIX 1: Removed the duplicate nested fetch_video_details definition
+# FIX 2: Transcript fetching now handles both old (list of dicts) and new (FetchedTranscript object) API formats
+# FIX 3: Added per-video progress updates so the UI doesn't appear frozen
+def fetch_video_details(youtube, ids, with_transcript=False):
+    result = []
+    total = len(ids)
+
+    for i in range(0, total, 50):
+        chunk = ids[i:i + 50]
+        try:
+            resp = youtube.videos().list(
+                part="snippet,statistics,contentDetails",
+                id=",".join(chunk)
+            ).execute()
+
+            for v in resp.get("items", []):
+                title = v.get("snippet", {}).get("title", "Unknown Title")
+                date = v.get("snippet", {}).get("publishedAt", "N/A")[:10]
+                stats = v.get("statistics", {})
+                video_id = v.get("id", "Unknown ID")
+
+                try:
+                    raw_duration = v.get("contentDetails", {}).get("duration", "PT0S")
+                    length = str(isodate.parse_duration(raw_duration))
+                except Exception:
+                    length = "N/A"
+
+                transcript_text = "N/A"
+                if with_transcript:
+                    # Update progress label so the user knows transcripts are being fetched
+                    progress_label.configure(
+                        text=f"🔄 Fetching transcript {len(result) + 1}/{total}: {title[:50]}..."
+                    )
+                    app.update()
+
+                    try:
+                        transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+
+                        # Try English first, fall back to any available language
+                        try:
+                            fetched = transcript_list.find_transcript(['en']).fetch()
+                        except Exception:
+                            fetched = next(iter(transcript_list)).fetch()
+
+                        # FIX 2: Handle both API response formats:
+                        # - New API (>=0.6.0): FetchedTranscript object, iterate with .text attribute
+                        # - Old API (<0.6.0): plain list of dicts with "text" key
+                        snippets = []
+                        for entry in fetched:
+                            if isinstance(entry, dict):
+                                snippets.append(entry.get("text", ""))
+                            else:
+                                # New API returns snippet objects with a .text attribute
+                                snippets.append(getattr(entry, "text", str(entry)))
+
+                        transcript_text = " ".join(snippets).strip() or "Unavailable"
+
+                    except (TranscriptsDisabled, NoTranscriptFound):
+                        transcript_text = "Unavailable"
+                    except Exception:
+                        transcript_text = "Unavailable"
+
+                result.append((
+                    title,
+                    length,
+                    stats.get("viewCount", "0"),
+                    stats.get("likeCount", "0"),
+                    stats.get("commentCount", "0"),
+                    date,
+                    transcript_text,
+                    video_id
+                ))
+
+        except Exception as e:
+            print(f"Failed to fetch chunk starting at index {i}: {e}")
+            continue
+
+    return result  # FIX 1: This return was unreachable in the original due to the duplicate definition
+
+
+fetch_btn = ctk.CTkButton(app, text="Fetch Videos", command=on_fetch)
+fetch_btn.pack(pady=5)
+
+export_btn = ctk.CTkButton(app, text="Export to CSV", command=export_to_csv)
+export_btn.pack(pady=5)
+
+copy_btn = ctk.CTkButton(app, text="Copy to Clipboard", command=copy_to_clipboard)
+copy_btn.pack(pady=5)
+
+app.mainloop()

@@ -14,3 +14,54 @@ import * as zod from "zod";
 export const HealthCheckResponse = zod.object({
   status: zod.string(),
 });
+
+/**
+ * @summary Resolve channel ID from URL or video URL
+ */
+export const ResolveChannelIdBody = zod.object({
+  apiKey: zod.string(),
+  url: zod.string(),
+});
+
+export const ResolveChannelIdResponse = zod.object({
+  channelId: zod.string(),
+  channelTitle: zod.string(),
+});
+
+/**
+ * @summary Fetch videos from a YouTube channel
+ */
+export const FetchVideosBody = zod.object({
+  apiKey: zod.string(),
+  channelId: zod.string(),
+  limit: zod.number().nullish(),
+  withTranscripts: zod.boolean(),
+});
+
+export const FetchVideosResponse = zod.object({
+  videos: zod.array(
+    zod.object({
+      videoId: zod.string(),
+      title: zod.string(),
+      duration: zod.string(),
+      views: zod.string(),
+      likes: zod.string(),
+      comments: zod.string(),
+      publishedAt: zod.string(),
+      transcript: zod.string(),
+    }),
+  ),
+  total: zod.number(),
+});
+
+/**
+ * @summary Fetch transcript for a video
+ */
+export const FetchTranscriptParams = zod.object({
+  videoId: zod.coerce.string(),
+});
+
+export const FetchTranscriptResponse = zod.object({
+  videoId: zod.string(),
+  transcript: zod.string(),
+});
