@@ -1,0 +1,458 @@
+"""
+Moodle Bulk Video Downloader
+============================
+Downloads videos from all enrolled courses on a Moodle-based site.
+
+Setup:
+    pip install requests beautifulsoup4 tqdm
+
+Credentials (choose one method):
+    1. Environment variables (recommended):
+         export MOODLE_USER=your_username
+         export MOODLE_PASS=your_password
+
+    2. CLI flags:
+         python moodle_downloader.py --username yourname --password yourpass
+
+    3. .env file (requires: pip install python-dotenv):
+         Create a file named .env with:
+           MOODLE_USER=yourname
+           MOODLE_PASS=yourpass
+"""
+
+import requests
+from bs4 import BeautifulSoup
+import os
+import sys
+import time
+import re
+import argparse
+import getpass
+import logging
+from urllib.parse import urljoin, urlparse, unquote
+from tqdm import tqdm
+from pathlib import Path
+
+# ── Optional: load .env file if python-dotenv is installed ─────────────────
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+# ── Constants ───────────────────────────────────────────────────────────────
+BASE_URL = "https://medical.drsadiqali.com/"
+VIDEO_EXTENSIONS = {".mp4", ".mkv", ".webm", ".mov", ".avi", ".flv"}
+CHUNK_SIZE = 16_384  # 16 KB per read chunk
+REQUEST_TIMEOUT = 30
+DOWNLOAD_TIMEOUT = 120
+RATE_LIMIT_DELAY = 0.75  # seconds between requests
+
+HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/131.0.0.0 Safari/537.36"
+    )
+}
+
+# ── Logging ─────────────────────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(levelname)-8s  %(message)s",
+    datefmt="%H:%M:%S",
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler("moodle_downloader.log", encoding="utf-8"),
+    ],
+)
+log = logging.getLogger(__name__)
+
+
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
+def safe_name(name: str, max_len: int = 100) -> str:
+    """Strip characters that are unsafe in file/folder names."""
+    cleaned = "".join(c if c.isalnum() or c in "._- " else "_" for c in name)
+    return cleaned.strip()[:max_len] or "unnamed"
+
+
+def is_video_url(url: str) -> bool:
+    path = urlparse(url).path.lower()
+    return any(path.endswith(ext) for ext in VIDEO_EXTENSIONS) or "pluginfile.php" in url
+
+
+def filename_from_response(resp: requests.Response, fallback: str) -> str:
+    """
+    Derive a filename from Content-Disposition header or the final URL.
+    Falls back to `fallback` + '.mp4' if nothing useful is found.
+    """
+    cd = resp.headers.get("content-disposition", "")
+    if cd:
+        for pattern in [r'filename\*=UTF-8\'\'([^;\s]+)', r'filename="?([^";\s]+)"?']:
+            m = re.search(pattern, cd, re.IGNORECASE)
+            if m:
+                return unquote(m.group(1))
+
+    path = urlparse(resp.url).path
+    name = unquote(os.path.basename(path))
+    if name and "." in name:
+        return name
+
+    return safe_name(fallback) + ".mp4"
+
+
+# ── Authentication ───────────────────────────────────────────────────────────
+
+def login(session: requests.Session, username: str, password: str) -> bool:
+    """Log in to Moodle and return True on success."""
+    log.info("Logging in as '%s'…", username)
+    login_url = urljoin(BASE_URL, "login/index.php")
+
+    try:
+        resp = session.get(login_url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+        resp.raise_for_status()
+    except requests.RequestException as exc:
+        log.error("Could not reach login page: %s", exc)
+        return False
+
+    soup = BeautifulSoup(resp.text, "html.parser")
+    token_tag = soup.find("input", {"name": "logintoken"})
+    logintoken = token_tag["value"] if token_tag else ""
+
+    payload = {
+        "username": username,
+        "password": password,
+        "logintoken": logintoken,
+        "rememberusername": "1",
+    }
+
+    try:
+        resp = session.post(
+            login_url, data=payload, headers=HEADERS,
+            allow_redirects=True, timeout=REQUEST_TIMEOUT
+        )
+    except requests.RequestException as exc:
+        log.error("Login POST failed: %s", exc)
+        return False
+
+    success_markers = ["log out", "logout", "my courses", "dashboard", "my home"]
+    if any(m in resp.text.lower() for m in success_markers):
+        log.info("Login successful.")
+        return True
+
+    log.error("Login failed — check your credentials or the site's login page.")
+    return False
+
+
+# ── Course discovery ─────────────────────────────────────────────────────────
+
+def get_enrolled_courses(session: requests.Session) -> list[tuple[str, str]]:
+    """Return a list of (title, url) tuples for all enrolled courses."""
+    log.info("Fetching enrolled courses…")
+    candidate_urls = [
+        urljoin(BASE_URL, "my/courses.php"),
+        urljoin(BASE_URL, "my/"),
+        urljoin(BASE_URL, "course/index.php"),
+    ]
+    courses: dict[str, str] = {}  # url → title
+
+    for page_url in candidate_urls:
+        try:
+            resp = session.get(page_url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+            if resp.status_code != 200:
+                continue
+            soup = BeautifulSoup(resp.text, "html.parser")
+
+            for a in soup.find_all("a", href=True):
+                href = a["href"]
+                title = a.get_text(separator=" ", strip=True)
+                if "course/view.php?id=" in href and len(title) > 3:
+                    if title.lower() not in {"home", "log in", "moodle"}:
+                        full_url = urljoin(BASE_URL, href)
+                        if full_url not in courses:
+                            courses[full_url] = title
+        except requests.RequestException as exc:
+            log.debug("Could not fetch %s: %s", page_url, exc)
+            continue
+
+        if courses:
+            break  # found courses on this page — no need to try others
+
+    return [(title, url) for url, title in courses.items()]
+
+
+# ── Video extraction ─────────────────────────────────────────────────────────
+
+def _scan_page_for_videos(
+    session: requests.Session, page_url: str
+) -> list[tuple[str, str]]:
+    """
+    Scan a single page for video links, pluginfile downloads,
+    and embedded <video>/<source> tags.
+    """
+    found: dict[str, str] = {}  # url → title
+
+    try:
+        resp = session.get(page_url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+        if resp.status_code != 200:
+            return []
+        soup = BeautifulSoup(resp.text, "html.parser")
+    except requests.RequestException:
+        return []
+
+    # Direct <a> links to video files or pluginfile.php
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        if is_video_url(href):
+            url = urljoin(page_url, href)
+            title = a.get_text(strip=True) or unquote(os.path.basename(urlparse(url).path))
+            found[url] = title
+
+    # Embedded <video> and <source> tags
+    for tag in soup.find_all(["video", "source"]):
+        src = tag.get("src") or tag.get("data-src")
+        if src and is_video_url(src):
+            url = urljoin(page_url, src)
+            found.setdefault(url, "Embedded Video")
+
+    # External platforms (skipped during download, but collected for reporting)
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        if "youtube.com/watch" in href or "youtu.be/" in href or "vimeo.com/" in href:
+            found[href] = a.get_text(strip=True) or "External Video"
+
+    return [(title, url) for url, title in found.items()]
+
+
+def extract_video_links(
+    session: requests.Session, course_url: str, course_title: str
+) -> list[tuple[str, str]]:
+    """
+    Collect all video links from a course page and its resource sub-pages.
+    """
+    log.info("  Scanning course: %s", course_title)
+    all_videos: dict[str, str] = {}
+
+    try:
+        resp = session.get(course_url, headers=HEADERS, timeout=REQUEST_TIMEOUT)
+        resp.raise_for_status()
+        soup = BeautifulSoup(resp.text, "html.parser")
+    except requests.RequestException as exc:
+        log.warning("  Could not load course page: %s", exc)
+        return []
+
+    # Collect direct videos from the course index page
+    for title, url in _scan_page_for_videos(session, course_url):
+        all_videos[url] = title
+
+    # Visit resource/URL activity pages
+    resource_patterns = ["mod/resource/view.php", "mod/url/view.php", "mod/page/view.php"]
+    visited: set[str] = set()
+
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        if any(p in href for p in resource_patterns):
+            resource_url = urljoin(course_url, href)
+            if resource_url in visited:
+                continue
+            visited.add(resource_url)
+
+            time.sleep(RATE_LIMIT_DELAY)
+            for title, url in _scan_page_for_videos(session, resource_url):
+                all_videos.setdefault(url, title)
+
+    return [(title, url) for url, title in all_videos.items()]
+
+
+# ── Downloading ──────────────────────────────────────────────────────────────
+
+def download_video(
+    session: requests.Session,
+    video_url: str,
+    video_title: str,
+    folder: str,
+) -> bool:
+    """
+    Download a single video file. Returns True on success.
+    Skips if the file already exists (resume-friendly).
+    """
+    Path(folder).mkdir(parents=True, exist_ok=True)
+
+    try:
+        # HEAD request first to get filename / size without downloading
+        head = session.head(
+            video_url, headers=HEADERS, allow_redirects=True,
+            timeout=REQUEST_TIMEOUT
+        )
+        filename = filename_from_response(head, video_title)
+        filepath = os.path.join(folder, safe_name(filename))
+
+        # Resume / skip logic
+        existing_size = os.path.getsize(filepath) if os.path.exists(filepath) else 0
+        total_size = int(head.headers.get("content-length", 0))
+
+        if existing_size and existing_size == total_size:
+            log.info("  ⏭  Already complete: %s", filename)
+            return True
+
+        resume_headers = dict(HEADERS)
+        if existing_size and total_size:
+            resume_headers["Range"] = f"bytes={existing_size}-"
+            log.info("  ↻  Resuming from %d bytes: %s", existing_size, filename)
+        else:
+            log.info("  ↓  Downloading: %s", filename)
+
+        resp = session.get(
+            video_url, headers=resume_headers,
+            stream=True, timeout=DOWNLOAD_TIMEOUT
+        )
+        resp.raise_for_status()
+
+        mode = "ab" if existing_size else "wb"
+        downloaded = existing_size
+
+        with open(filepath, mode) as f, tqdm(
+            total=total_size or None,
+            initial=existing_size,
+            unit="B",
+            unit_scale=True,
+            desc=filename[:45],
+            leave=False,
+        ) as bar:
+            for chunk in resp.iter_content(chunk_size=CHUNK_SIZE):
+                if chunk:
+                    f.write(chunk)
+                    bar.update(len(chunk))
+                    downloaded += len(chunk)
+
+        log.info("  ✓  Saved: %s", filepath)
+        return True
+
+    except requests.HTTPError as exc:
+        log.error("  ✗  HTTP error for '%s': %s", video_title, exc)
+    except requests.RequestException as exc:
+        log.error("  ✗  Network error for '%s': %s", video_title, exc)
+    except OSError as exc:
+        log.error("  ✗  File write error for '%s': %s", video_title, exc)
+
+    return False
+
+
+# ── CLI ───────────────────────────────────────────────────────────────────────
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Bulk-download videos from a Moodle LMS site.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=__doc__,
+    )
+    parser.add_argument("--username", "-u", help="Moodle username (or set MOODLE_USER env var)")
+    parser.add_argument("--password", "-p", help="Moodle password (or set MOODLE_PASS env var)")
+    parser.add_argument("--output", "-o", default="downloads", help="Output folder (default: downloads)")
+    parser.add_argument("--dry-run", action="store_true", help="List videos without downloading")
+    parser.add_argument("--verbose", "-v", action="store_true", help="Enable debug logging")
+    return parser.parse_args()
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+def main() -> None:
+    args = parse_args()
+
+    if args.verbose:
+        logging.getLogger().setLevel(logging.DEBUG)
+
+    # Resolve credentials: CLI flag → env var → interactive prompt
+    username = args.username or os.environ.get("MOODLE_USER") or input("Moodle username: ").strip()
+    password = args.password or os.environ.get("MOODLE_PASS") or getpass.getpass("Moodle password: ")
+
+    if not username or not password:
+        log.error("Username and password are required.")
+        sys.exit(1)
+
+    print("=" * 70)
+    print("  Moodle Bulk Video Downloader")
+    print("=" * 70)
+
+    session = requests.Session()
+    session.headers.update(HEADERS)
+
+    if not login(session, username, password):
+        sys.exit(1)
+
+    courses = get_enrolled_courses(session)
+    if not courses:
+        log.error("No enrolled courses found.")
+        sys.exit(1)
+
+    log.info("Found %d course(s):", len(courses))
+    for i, (title, _) in enumerate(courses, 1):
+        print(f"  {i:2d}. {title}")
+
+    # Scan all courses for videos
+    all_course_videos: list[tuple[str, list[tuple[str, str]]]] = []
+    for course_title, course_url in courses:
+        videos = extract_video_links(session, course_url, course_title)
+        if videos:
+            all_course_videos.append((course_title, videos))
+            log.info("  → %d video(s) in '%s'", len(videos), course_title)
+        time.sleep(RATE_LIMIT_DELAY)
+
+    if not all_course_videos:
+        log.error("No videos found in any course.")
+        sys.exit(1)
+
+    total_videos = sum(len(v) for _, v in all_course_videos)
+    print(f"\n  Total: {total_videos} video(s) across {len(all_course_videos)} course(s)")
+
+    if args.dry_run:
+        print("\n[Dry run — no files will be downloaded]\n")
+        for course_title, videos in all_course_videos:
+            print(f"\n  📁 {course_title}")
+            for title, url in videos:
+                print(f"     • {title}  →  {url}")
+        sys.exit(0)
+
+    confirm = input("\nDownload all videos now? [yes/no]: ").strip().lower()
+    if confirm not in {"y", "yes"}:
+        print("Cancelled.")
+        sys.exit(0)
+
+    # Download
+    success_count = 0
+    skip_count = 0
+    fail_count = 0
+
+    for course_title, videos in all_course_videos:
+        folder = os.path.join(args.output, safe_name(course_title))
+        print(f"\n  📁 {course_title}  ({len(videos)} video(s))")
+
+        for title, url in videos:
+            if "youtube.com" in url or "youtu.be" in url or "vimeo.com" in url:
+                log.warning("  ⚠  External (use yt-dlp): %s", title)
+                skip_count += 1
+                continue
+
+            ok = download_video(session, url, title, folder)
+            if ok:
+                success_count += 1
+            else:
+                fail_count += 1
+            time.sleep(RATE_LIMIT_DELAY)
+
+    # Summary
+    print("\n" + "=" * 70)
+    print(f"  ✓ Downloaded : {success_count}")
+    print(f"  ⚠ Skipped    : {skip_count}  (external platform)")
+    print(f"  ✗ Failed     : {fail_count}")
+    print(f"  Files saved in: '{args.output}/'")
+    print("=" * 70)
+
+    if fail_count:
+        log.info("Check moodle_downloader.log for details on failures.")
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()

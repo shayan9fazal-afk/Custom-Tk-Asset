@@ -5,8 +5,9 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import Home from "@/pages/home";
 import Downloader from "@/pages/downloader";
 import TikTokScraper from "@/pages/tiktok-scraper";
+import MoodleDownloader from "@/pages/moodle-downloader";
 import NotFound from "@/pages/not-found";
-import { Youtube, Download, Music2 } from "lucide-react";
+import { Youtube, Download, Music2, GraduationCap } from "lucide-react";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -35,18 +36,22 @@ function NavLink({ href, children }: { href: string; children: React.ReactNode }
 
 function Nav() {
   return (
-    <nav className="fixed top-0 left-0 right-0 z-50 flex items-center justify-center gap-2 p-3 bg-background/80 backdrop-blur-xl border-b border-border/50">
+    <nav className="fixed top-0 left-0 right-0 z-50 flex items-center justify-center gap-2 p-3 bg-background/80 backdrop-blur-xl border-b border-border/50 flex-wrap">
       <NavLink href="/">
         <Youtube className="w-4 h-4" />
         Channel Analyzer
       </NavLink>
       <NavLink href="/downloader">
         <Download className="w-4 h-4" />
-        YT Downloader
+        Video Downloader
       </NavLink>
       <NavLink href="/tiktok">
         <Music2 className="w-4 h-4" />
         TikTok Scraper
+      </NavLink>
+      <NavLink href="/moodle">
+        <GraduationCap className="w-4 h-4" />
+        Moodle Downloader
       </NavLink>
     </nav>
   );
@@ -61,6 +66,7 @@ function Router() {
           <Route path="/" component={Home} />
           <Route path="/downloader" component={Downloader} />
           <Route path="/tiktok" component={TikTokScraper} />
+          <Route path="/moodle" component={MoodleDownloader} />
           <Route component={NotFound} />
         </Switch>
       </div>
