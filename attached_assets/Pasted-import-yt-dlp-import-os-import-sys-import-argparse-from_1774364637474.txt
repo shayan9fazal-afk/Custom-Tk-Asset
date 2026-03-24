@@ -1,0 +1,237 @@
+import yt_dlp
+import os
+import sys
+import argparse
+from pathlib import Path
+
+
+def build_ydl_opts(download_folder: str, cookies_file: str | None, quality: str, verbose: bool) -> dict:
+    """Build yt-dlp options dict based on user preferences."""
+
+    format_map = {
+        "best":   "bestvideo+bestaudio/best",
+        "1080p":  "bestvideo[height<=1080]+bestaudio/best[height<=1080]",
+        "720p":   "bestvideo[height<=720]+bestaudio/best[height<=720]",
+        "480p":   "bestvideo[height<=480]+bestaudio/best[height<=480]",
+        "audio":  "bestaudio/best",
+    }
+
+    opts = {
+        # Save with video title inside the chosen folder
+        "outtmpl": str(Path(download_folder) / "%(title)s.%(ext)s"),
+
+        # Quality / format selection
+        "format": format_map.get(quality, format_map["best"]),
+
+        # Merge video+audio into a single mp4 when separate streams are fetched
+        "merge_output_format": "mp4",
+
+        # Post-processing: embed subtitles & thumbnail when available
+        "writethumbnail": False,
+        "embedthumbnail": False,
+        "writesubtitles": False,
+
+        # Retry on transient network errors
+        "retries": 5,
+        "fragment_retries": 5,
+
+        # Continue to next URL on failure instead of aborting
+        "ignoreerrors": True,
+
+        # Verbosity
+        "verbose": verbose,
+        "quiet": not verbose,
+        "no_warnings": not verbose,
+
+        # Show a download progress bar
+        "progress_hooks": [progress_hook],
+    }
+
+    # Only attach cookies if the file actually exists
+    if cookies_file and Path(cookies_file).is_file():
+        opts["cookiefile"] = cookies_file
+    elif cookies_file:
+        print(f"[warning] Cookies file not found: {cookies_file!r} — proceeding without it.")
+
+    return opts
+
+
+# --------------------------------------------------------------------------- #
+# Progress hook
+# --------------------------------------------------------------------------- #
+
+def progress_hook(d: dict) -> None:
+    """Print a concise progress line during download."""
+    status = d.get("status")
+    if status == "downloading":
+        filename = Path(d.get("filename", "?")).name
+        downloaded = d.get("_downloaded_bytes_str", "?")
+        total = d.get("_total_bytes_str") or d.get("_total_bytes_estimate_str", "?")
+        speed = d.get("_speed_str", "?")
+        eta = d.get("_eta_str", "?")
+        print(
+            f"\r  ↓ {filename[:50]:<50}  {downloaded:>8} / {total:<8}  {speed:>10}  ETA {eta}",
+            end="",
+            flush=True,
+        )
+    elif status == "finished":
+        print()  # newline after the progress bar
+
+
+# --------------------------------------------------------------------------- #
+# Core downloader
+# --------------------------------------------------------------------------- #
+
+def download_videos(
+    video_urls: list[str],
+    download_folder: str = "downloads",
+    cookies_file: str | None = "cookies.txt",
+    quality: str = "best",
+    verbose: bool = False,
+) -> dict[str, bool]:
+    """
+    Download a list of video URLs using yt-dlp.
+
+    Returns a dict mapping each URL to True (success) or False (failure).
+    """
+    # Ensure the output directory exists
+    Path(download_folder).mkdir(parents=True, exist_ok=True)
+
+    ydl_opts = build_ydl_opts(download_folder, cookies_file, quality, verbose)
+    results: dict[str, bool] = {}
+
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        for i, url in enumerate(video_urls, start=1):
+            print(f"\n[{i}/{len(video_urls)}] Downloading: {url}")
+            try:
+                ret_code = ydl.download([url])
+                # yt-dlp returns 0 on full success; non-zero when errors occurred
+                success = ret_code == 0
+                results[url] = success
+                if success:
+                    print(f"  ✓ Done: {url}")
+                else:
+                    print(f"  ✗ Completed with errors: {url}")
+            except Exception as exc:
+                print(f"  ✗ Exception for {url}: {exc}")
+                results[url] = False
+
+    return results
+
+
+# --------------------------------------------------------------------------- #
+# Summary printer
+# --------------------------------------------------------------------------- #
+
+def print_summary(results: dict[str, bool]) -> None:
+    total = len(results)
+    succeeded = sum(results.values())
+    failed = total - succeeded
+
+    print("\n" + "=" * 60)
+    print(f"  Summary: {succeeded}/{total} downloaded successfully")
+    if failed:
+        print(f"\n  Failed URLs ({failed}):")
+        for url, ok in results.items():
+            if not ok:
+                print(f"    • {url}")
+    print("=" * 60)
+
+
+# --------------------------------------------------------------------------- #
+# CLI entry-point
+# --------------------------------------------------------------------------- #
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Batch video downloader powered by yt-dlp",
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
+    parser.add_argument(
+        "urls",
+        nargs="*",
+        help="One or more video URLs to download.",
+    )
+    parser.add_argument(
+        "-f", "--file",
+        metavar="FILE",
+        help="Path to a text file containing one URL per line.",
+    )
+    parser.add_argument(
+        "-o", "--output",
+        default="downloads",
+        metavar="DIR",
+        help="Destination folder for downloaded files. (default: downloads)",
+    )
+    parser.add_argument(
+        "-c", "--cookies",
+        default="cookies.txt",
+        metavar="FILE",
+        help="Path to a Netscape-format cookies file. (default: cookies.txt)",
+    )
+    parser.add_argument(
+        "-q", "--quality",
+        choices=["best", "1080p", "720p", "480p", "audio"],
+        default="best",
+        help="Preferred download quality. (default: best)",
+    )
+    parser.add_argument(
+        "-v", "--verbose",
+        action="store_true",
+        help="Enable verbose yt-dlp output for debugging.",
+    )
+    return parser.parse_args()
+
+
+def collect_urls(args: argparse.Namespace) -> list[str]:
+    """Combine URLs from CLI arguments and/or a text file, deduplicated."""
+    urls = list(args.urls)
+
+    if args.file:
+        file_path = Path(args.file)
+        if not file_path.is_file():
+            print(f"[error] URL file not found: {args.file}", file=sys.stderr)
+            sys.exit(1)
+        with file_path.open() as fh:
+            for line in fh:
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    urls.append(line)
+
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    unique: list[str] = []
+    for u in urls:
+        if u not in seen:
+            seen.add(u)
+            unique.append(u)
+
+    return unique
+
+
+if __name__ == "__main__":
+    args = parse_args()
+    urls = collect_urls(args)
+
+    # Fallback: use hardcoded example URLs when no input is supplied
+    if not urls:
+        urls = [
+            "https://dmlec.com/video-page-url-1",
+            "https://dmlec.com/video-page-url-2",
+            # Add more URLs here
+        ]
+        print("[info] No URLs provided — using example list.")
+
+    print(f"[info] {len(urls)} URL(s) queued  |  output → '{args.output}'  |  quality: {args.quality}")
+
+    results = download_videos(
+        video_urls=urls,
+        download_folder=args.output,
+        cookies_file=args.cookies,
+        quality=args.quality,
+        verbose=args.verbose,
+    )
+
+    print_summary(results)
+    # Exit with a non-zero code if any download failed (useful in scripts/CI)
+    sys.exit(0 if all(results.values()) else 1)
